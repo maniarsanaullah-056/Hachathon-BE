@@ -1,0 +1,36 @@
+import mongoose from 'mongoose';
+
+const policySchema = new mongoose.Schema({
+  title: { type: String, required: true, trim: true, maxlength: 150 },
+  content: { type: String, required: true, trim: true, maxlength: 5000 },
+});
+
+const companySchema = new mongoose.Schema(
+  {
+    // Sirf ek hi company ho sakti hai: yeh unique key race condition roakti hai
+    singletonKey: { type: String, default: 'main', unique: true, immutable: true },
+    name: { type: String, required: true, trim: true, maxlength: 120 },
+
+    timezone: { type: String, default: 'Asia/Karachi' },
+    currency: { type: String, default: 'PKR' },
+    officeStartTime: { type: String, default: '09:00' },
+    officeEndTime: { type: String, default: '18:00' },
+    graceMinutes: { type: Number, default: 15, min: 0, max: 120 },
+    weekendDays: { type: [Number], default: [0, 6] }, // 0 = Sunday, 6 = Saturday
+    halfDayThresholdHours: { type: Number, default: 5, min: 0, max: 12 },
+
+    // Bonus geolocation attendance ke liye (Phase 3)
+    officeLocation: {
+      latitude: { type: Number, min: -90, max: 90, default: null },
+      longitude: { type: Number, min: -180, max: 180, default: null },
+      radiusMeters: { type: Number, min: 10, max: 5000, default: 200 },
+    },
+
+    policies: { type: [policySchema], default: [] },
+
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  },
+  { timestamps: true }
+);
+
+export default mongoose.model('Company', companySchema);
