@@ -7,7 +7,7 @@ const policySchema = new mongoose.Schema({
 
 const companySchema = new mongoose.Schema(
   {
-    // Sirf ek hi company ho sakti hai: yeh unique key race condition roakti hai
+    // Sirf ek hi company ho sakti hai: yeh unique key race condition rokti hai
     singletonKey: { type: String, default: 'main', unique: true, immutable: true },
     name: { type: String, required: true, trim: true, maxlength: 120 },
 
@@ -19,11 +19,18 @@ const companySchema = new mongoose.Schema(
     weekendDays: { type: [Number], default: [0, 6] }, // 0 = Sunday, 6 = Saturday
     halfDayThresholdHours: { type: Number, default: 5, min: 0, max: 12 },
 
-    // Bonus geolocation attendance ke liye (Phase 3)
+    // Geolocation settings for attendance
     officeLocation: {
       latitude: { type: Number, min: -90, max: 90, default: null },
       longitude: { type: Number, min: -180, max: 180, default: null },
-      radiusMeters: { type: Number, min: 10, max: 5000, default: 200 },
+      radiusMeters: { type: Number, min: 10, max: 5000, default: 150 },
+    },
+
+    // Bonus late penalty setting: e.g. 3 lates = 0.5 day deduction
+    latePenaltyRule: {
+      enabled: { type: Boolean, default: true },
+      latesThreshold: { type: Number, default: 3 },
+      deductionDays: { type: Number, default: 0.5 },
     },
 
     policies: { type: [policySchema], default: [] },

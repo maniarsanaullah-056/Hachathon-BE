@@ -8,5 +8,6 @@ const router = Router();
 
 router.get('/status', getSetupStatus);
 router.post('/', authLimiter, setupValidator, validate, runSetup);
+router.post('/init', authLimiter, setupValidator, validate, runSetup);
 
 export default router;

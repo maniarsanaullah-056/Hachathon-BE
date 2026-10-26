@@ -1,5 +1,9 @@
 import Employee, { GENDERS } from '../models/Employee.js';
 import User from '../models/User.js';
+import Attendance from '../models/Attendance.js';
+import LeaveApplication from '../models/LeaveApplication.js';
+import Payslip from '../models/Payslip.js';
+import AuditLog from '../models/AuditLog.js';
 import ApiError from '../utils/ApiError.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import { sendSuccess } from '../utils/apiResponse.js';
@@ -13,6 +17,7 @@ import { assertReferences, createEmployeeWithLogin, rollbackCreated } from '../s
 import { resetUserPassword } from '../services/userService.js';
 import { analyzeCsv } from '../services/csvImportService.js';
 import { logAudit } from '../services/auditService.js';
+import { calculateLeaveBalances } from '../services/leaveService.js';
 
 const POPULATE = [
   { path: 'department', select: 'name' },
@@ -37,7 +42,9 @@ function buildFilter(query) {
 
 async function findEmployeeOrFail(id, { withSalary = false } = {}) {
   let query = Employee.findById(id);
-  if (withSalary) query = query.select('+basicSalary');
+  if (withSalary) {
+    query = query.select('+basicSalary +hraAllowance +medicalAllowance +otherAllowance +isCustomSalaryStructure');
+  }
   const employee = await query;
   if (!employee) throw new ApiError(404, 'Employee not found');
   return employee;
@@ -58,11 +65,10 @@ export const listEmployees = asyncHandler(async (req, res) => {
   sendSuccess(res, { items, pagination: paginationMeta(page, limit, total) });
 });
 
-// ---------- Employee 360 ----------
+// ---------- Employee Details & 360 ----------
 export const getEmployee = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  // Ownership check server par: employee sirf apna record dekh sakta hai
   if (req.user.role === ROLES.EMPLOYEE) {
     const own = await Employee.findOne({ user: req.user._id }).select('_id');
     if (!own || String(own._id) !== id) {
@@ -80,6 +86,67 @@ export const getEmployee = asyncHandler(async (req, res) => {
   sendSuccess(res, { employee, account });
 });
 
+export const getEmployee360 = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  if (req.user.role === ROLES.EMPLOYEE) {
+    const own = await Employee.findOne({ user: req.user._id }).select('_id');
+    if (!own || String(own._id) !== id) {
+      throw new ApiError(403, 'You can only view your own 360 profile');
+    }
+  }
+
+  const showSalary = canSeeSalary(req);
+  const employee = await findEmployeeOrFail(id, { withSalary: showSalary });
+  await employee.populate(POPULATE);
+
+  // 1. Attendance Summary (last 30 days)
+  const recentAttendances = await Attendance.find({ employee: employee._id })
+    .sort({ date: -1 })
+    .limit(30);
+
+  const presentCount = recentAttendances.filter((a) => a.status === 'present').length;
+  const lateCount = recentAttendances.filter((a) => a.status === 'late' || a.isLate).length;
+  const halfDayCount = recentAttendances.filter((a) => a.status === 'half_day').length;
+
+  // 2. Leave Balances
+  const leaveBalances = await calculateLeaveBalances(employee._id);
+
+  // 3. Payslips
+  const payslipQuery = { employee: employee._id };
+  if (!showSalary) {
+    payslipQuery.status = 'finalized';
+  }
+  const payslips = await Payslip.find(payslipQuery).sort({ month: -1 }).limit(12);
+
+  // 4. Audit History for this employee
+  let auditHistory = [];
+  if (req.user.role === ROLES.ADMIN) {
+    auditHistory = await AuditLog.find({ entityId: employee._id })
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .populate('actor', 'name email role');
+  }
+
+  // Account details
+  let account = null;
+  if (showSalary) {
+    account = await User.findById(employee.user).select('isActive lastLoginAt mustChangePassword');
+  }
+
+  sendSuccess(res, {
+    employee,
+    account,
+    attendanceSummary: {
+      recentRecords: recentAttendances.slice(0, 7),
+      last30Days: { present: presentCount, late: lateCount, halfDay: halfDayCount },
+    },
+    leaveBalances,
+    payslips: showSalary ? payslips : payslips.map((p) => ({ _id: p._id, month: p.month, netSalary: p.netSalary })),
+    history: auditHistory,
+  });
+});
+
 export const getMyEmployee = asyncHandler(async (req, res) => {
   const employee = await Employee.findOne({ user: req.user._id }).populate(POPULATE);
   if (!employee) throw new ApiError(404, 'No employee profile is linked to this account');
@@ -91,12 +158,19 @@ export const updateMyProfile = asyncHandler(async (req, res) => {
   if (!employee) throw new ApiError(404, 'No employee profile is linked to this account');
 
   const before = pick(employee.toObject(), ['phone', 'address']);
-  // Employee sirf phone aur address badal sakta hai
   employee.set(pick(req.body, ['phone', 'address']));
   await employee.save();
   await employee.populate(POPULATE);
 
-  await logAudit({ actor: req.user, action: 'EMPLOYEE_SELF_UPDATED', entity: 'Employee', entityId: employee._id, before, after: pick(employee.toObject(), ['phone', 'address']), req });
+  await logAudit({
+    actor: req.user,
+    action: 'EMPLOYEE_SELF_UPDATED',
+    entity: 'Employee',
+    entityId: employee._id,
+    before,
+    after: pick(employee.toObject(), ['phone', 'address']),
+    req,
+  });
   sendSuccess(res, { employee }, 'Profile updated');
 });
 
@@ -131,7 +205,6 @@ export const updateEmployee = asyncHandler(async (req, res) => {
   employee.set(data);
   await employee.save();
 
-  // Login account ka naam/email bhi sync rakhte hain
   if (data.fullName || data.email) {
     const user = await User.findById(employee.user);
     if (user) {
@@ -144,6 +217,50 @@ export const updateEmployee = asyncHandler(async (req, res) => {
   await employee.populate(POPULATE);
   await logAudit({ actor: req.user, action: 'EMPLOYEE_UPDATED', entity: 'Employee', entityId: employee._id, before, after: employee, req });
   sendSuccess(res, { employee }, 'Employee updated');
+});
+
+export const updateSalaryStructure = asyncHandler(async (req, res) => {
+  const employee = await findEmployeeOrFail(req.params.id, { withSalary: true });
+  const before = {
+    basicSalary: employee.basicSalary,
+    hraAllowance: employee.hraAllowance,
+    medicalAllowance: employee.medicalAllowance,
+    otherAllowance: employee.otherAllowance,
+    isCustomSalaryStructure: employee.isCustomSalaryStructure,
+  };
+
+  const { basicSalary, hraAllowance, medicalAllowance, otherAllowance } = req.body;
+  if (basicSalary !== undefined) {
+    if (Number(basicSalary) <= 0) throw new ApiError(422, 'Basic salary must be greater than 0');
+    employee.basicSalary = Number(basicSalary);
+  }
+
+  if (hraAllowance !== undefined || medicalAllowance !== undefined || otherAllowance !== undefined) {
+    employee.isCustomSalaryStructure = true;
+    if (hraAllowance !== undefined) employee.hraAllowance = Number(hraAllowance);
+    if (medicalAllowance !== undefined) employee.medicalAllowance = Number(medicalAllowance);
+    if (otherAllowance !== undefined) employee.otherAllowance = Number(otherAllowance);
+  }
+
+  await employee.save();
+
+  await logAudit({
+    actor: req.user,
+    action: 'SALARY_STRUCTURE_UPDATED',
+    entity: 'Employee',
+    entityId: employee._id,
+    before,
+    after: {
+      basicSalary: employee.basicSalary,
+      hraAllowance: employee.hraAllowance,
+      medicalAllowance: employee.medicalAllowance,
+      otherAllowance: employee.otherAllowance,
+      isCustomSalaryStructure: employee.isCustomSalaryStructure,
+    },
+    req,
+  });
+
+  sendSuccess(res, employee, 'Salary structure updated successfully');
 });
 
 export const setEmployeeStatus = asyncHandler(async (req, res) => {
@@ -166,14 +283,21 @@ export const setEmployeeStatus = asyncHandler(async (req, res) => {
   }
   await employee.save();
 
-  // Sirf active employee login kar sakta hai
   if (user) {
     user.isActive = status === 'active';
     await user.save();
   }
 
   await employee.populate(POPULATE);
-  await logAudit({ actor: req.user, action: 'EMPLOYEE_STATUS_CHANGED', entity: 'Employee', entityId: employee._id, before, after: { employmentStatus: employee.employmentStatus, exitDate: employee.exitDate }, req });
+  await logAudit({
+    actor: req.user,
+    action: 'EMPLOYEE_STATUS_CHANGED',
+    entity: 'Employee',
+    entityId: employee._id,
+    before,
+    after: { employmentStatus: employee.employmentStatus, exitDate: employee.exitDate },
+    req,
+  });
   sendSuccess(res, { employee }, `Employee marked ${status}`);
 });
 
@@ -187,7 +311,7 @@ export const resetEmployeePassword = asyncHandler(async (req, res) => {
 
 // ---------- CSV import / export ----------
 export const importEmployees = asyncHandler(async (req, res) => {
-  const dryRun = req.query.dryRun !== 'false'; // default dry-run: safe side
+  const dryRun = req.query.dryRun !== 'false';
   const analysis = await analyzeCsv(req.body.csv);
   const { totalRows, validRows, invalidRows, errors, records } = analysis;
 
@@ -201,7 +325,13 @@ export const importEmployees = asyncHandler(async (req, res) => {
         invalidRows,
         errors,
         canImport: errors.length === 0 && totalRows > 0,
-        preview: records.slice(0, 5).map(({ row, employeeCode, fullName, email, joiningDate }) => ({ row, employeeCode, fullName, email, joiningDate })),
+        preview: records.slice(0, 5).map(({ row, employeeCode, fullName, email, joiningDate }) => ({
+          row,
+          employeeCode,
+          fullName,
+          email,
+          joiningDate,
+        })),
       },
       'Dry run complete. Nothing was saved.'
     );
@@ -218,7 +348,7 @@ export const importEmployees = asyncHandler(async (req, res) => {
       created.push(await createEmployeeWithLogin(record, req.user, req, { audit: false }));
     }
   } catch (err) {
-    await rollbackCreated(created); // all-or-nothing
+    await rollbackCreated(created);
     throw err;
   }
 
@@ -241,7 +371,19 @@ export const importEmployees = asyncHandler(async (req, res) => {
   );
 });
 
-const EXPORT_HEADERS = ['employeeCode', 'fullName', 'email', 'department', 'designation', 'joiningDate', 'basicSalary', 'phone', 'gender', 'address', 'employmentStatus'];
+const EXPORT_HEADERS = [
+  'employeeCode',
+  'fullName',
+  'email',
+  'department',
+  'designation',
+  'joiningDate',
+  'basicSalary',
+  'phone',
+  'gender',
+  'address',
+  'employmentStatus',
+];
 
 export const exportEmployees = asyncHandler(async (req, res) => {
   const employees = await Employee.find(buildFilter(req.query))
