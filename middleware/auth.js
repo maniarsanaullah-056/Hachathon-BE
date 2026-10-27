@@ -32,7 +32,7 @@ const buildProtect = ({ allowMustChange }) =>
     }
 
     if (user.mustChangePassword && !allowMustChange) {
-      throw new ApiError(403, 'You must change your password before continuing', {
+      throw new ApiError(403, 'You must change your password first. Call POST /api/auth/change-password, then retry this request with the new token.', {
         code: 'PASSWORD_CHANGE_REQUIRED',
       });
     }

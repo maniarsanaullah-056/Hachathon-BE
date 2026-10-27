@@ -18,11 +18,24 @@ const employeeSchema = new mongoose.Schema(
     phone: { type: String, trim: true, maxlength: 20, default: '' },
     address: { type: String, trim: true, maxlength: 300, default: '' },
     gender: { type: String, enum: [...GENDERS, null], default: null },
-    // Salary by default query se bahar rehti hai; sirf Admin/HR .select('+basicSalary') karte hain
+    // Salary breakdown
     basicSalary: { type: Number, required: true, min: 0.01, select: false },
+    hraAllowance: { type: Number, default: 0, select: false },
+    medicalAllowance: { type: Number, default: 0, select: false },
+    otherAllowance: { type: Number, default: 0, select: false },
+    isCustomSalaryStructure: { type: Boolean, default: false, select: false },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   },
   { timestamps: true }
 );
+
+// Virtual for gross salary: Gross = basic + HRA + medical + other
+employeeSchema.virtual('grossSalary').get(function () {
+  const basic = this.basicSalary || 0;
+  if (!this.isCustomSalaryStructure) {
+    return basic * 1.5; // Default: basic + 40% HRA + 10% Medical = 1.5 * basic
+  }
+  return basic + (this.hraAllowance || 0) + (this.medicalAllowance || 0) + (this.otherAllowance || 0);
+});
 
 export default mongoose.model('Employee', employeeSchema);
