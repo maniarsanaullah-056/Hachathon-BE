@@ -7,7 +7,6 @@ import { env } from "../config/env.js";
 import {
   createInitialSetup,
   isSetupComplete,
-  createAdminForExistingCompany,
 } from "../services/setupService.js";
 
 export const createAdditionalAdmin = asyncHandler(async (req, res) => {
@@ -49,27 +48,7 @@ export const createAdditionalAdmin = asyncHandler(async (req, res) => {
     return;
   }
 
-  const { company, admin } = await createAdminForExistingCompany(
-    {
-      name,
-      email,
-      password,
-    },
-    { req },
-  );
-
-  sendSuccess(
-    res,
-    {
-      user: admin,
-      company: {
-        id: company._id,
-        name: company.name,
-      },
-    },
-    "Admin created successfully",
-    201,
-  );
+  throw new ApiError(409, "Admin registration is closed after initial setup");
 });
 
 export const getSetupStatus = asyncHandler(async (_req, res) => {

@@ -64,7 +64,7 @@ Standard Error Format:
 - **Body**: `{ "currentPassword": "...", "newPassword": "..." }`
 
 ### POST `/api/admins`
-- **Access**: Public registration endpoint. Creates the initial company/admin if setup has not run; otherwise adds an admin to the existing company.
+- **Access**: Public one-time bootstrap endpoint. Creates the initial company/admin if setup has not run; returns 409 after initial setup. No other API can create admins.
 - **Body** (both this format and `name`/`email`/`password` are accepted):
 ```json
 {
@@ -74,7 +74,7 @@ Standard Error Format:
   "adminPassword": "AdminPass123"
 }
 ```
-- **Note**: Public access allows anyone who can reach the API to create an admin account after initial setup.
+- **Note**: If `SETUP_KEY` is configured, include `setupKey` in this initial request.
 
 ---
 

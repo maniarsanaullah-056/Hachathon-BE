@@ -46,7 +46,17 @@ curl http://localhost:5000/api/health
 ### 5. Run Smoke Tests
 Verify core math, tax slabs, distance checks, and parsing:
 ```bash
-node test-smoke.js
+npm run test:smoke
+```
+
+Run the focused unit and API integration suite:
+```bash
+npm test
+```
+Unit tests run without MongoDB. API integration tests require `TEST_MONGODB_URI` to point to a disposable database whose name contains `qa` or `test`; the suite drops that database before running. On PowerShell:
+```powershell
+$env:TEST_MONGODB_URI = "mongodb://localhost:27017/hcm-lite-qa"
+npm test
 ```
 
 ---
